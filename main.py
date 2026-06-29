@@ -6,7 +6,10 @@ import asyncio
 import random
 
 # Bot setup
-bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ========== SAVE DATA ==========
 DEFAULT_SAVE = {

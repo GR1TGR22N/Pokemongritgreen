@@ -4,7 +4,7 @@ from discord.ui import Button, View
 import json
 import os
 import random
-import asyncio
+import math
 
 # ========== BOT SETUP ==========
 intents = discord.Intents.default()
@@ -66,7 +66,8 @@ DEFAULT_SAVE = {
     ],
     "inventory": {"poke_balls": 2, "potions": 0, "antidotes": 2},
     "money": 320,
-    "location": "Viridian Forest"
+    "location": "Viridian Forest",
+    "box": []
 }
 
 SAVE_FILE = "save.json"
@@ -86,7 +87,7 @@ active_battles = {}
 
 # ========== UTILITIES ==========
 def hp_bar(current, maximum):
-    pct = current / maximum
+    pct = max(0, min(1, current / maximum))
     filled = round(pct * 4)
     return f"HP {'█' * filled}{'░' * (4 - filled)} {int(pct * 100)}%"
 
@@ -104,7 +105,7 @@ def party_display():
         lines.append("")
     return "\n".join(lines)
 
-# ========== ENCOUNTER TABLES (KANTO) ==========
+# ========== ENCOUNTER TABLES ==========
 ENCOUNTERS = {
     "Route 1": [
         {"name": "Pidgey", "level": (2, 5), "types": "Normal/Flying"},
@@ -145,13 +146,33 @@ LOCATIONS = {
     "Pewter City": {"south": "Route 2"}
 }
 
-# ========== BATTLE SYSTEM ==========
+# ========== CATCH RATE ==========
+def catch_rate(wild_mon, ball_type="poke"):
+    max_hp = wild_mon["max_hp"]
+    current_hp = wild_mon["hp"]
+    rate = 255  # Base catch rate (most common mons)
+    
+    # Pikachu is harder
+    if wild_mon["name"] == "Pikachu":
+        rate = 190
+    
+    a = ((3 * max_hp - 2 * current_hp) * rate) / (3 * max_hp)
+    if ball_type == "great":
+        a *= 1.5
+    elif ball_type == "ultra":
+        a *= 2.0
+    
+    b = 1048560 / math.sqrt(math.sqrt(16711680 / a))
+    return min(255, int(b))
+
+# ========== BATTLE VIEW ==========
 class BattleView(View):
     def __init__(self, user_id, wild_mon):
-        super().__init__(timeout=60)
+        super().__init__(timeout=120)
         self.user_id = user_id
         self.wild = wild_mon
-        self.active = save["party"][0]  # First party member
+        self.active = save["party"][0]
+        self.turn = 0
     
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -160,11 +181,12 @@ class BattleView(View):
         return True
     
     def build_embed(self):
-        lines = []
         w = self.wild
         a = self.active
+        shiny = "✨ " if w.get("shiny") else ""
         
-        lines.append(f"**Wild {w['name']}**  Lv.{w['level']}  {w['types']}")
+        lines = []
+        lines.append(f"{shiny}Wild **{w['name']}**  Lv.{w['level']}  {w['types']}")
         lines.append(hp_bar(w['hp'], w['max_hp']))
         lines.append("")
         lines.append(f"**{a['name']}**  Lv.{a['level']}  {a['types']}")
@@ -174,32 +196,86 @@ class BattleView(View):
             bp = f"{move['bp']} BP" if isinstance(move['bp'], int) else move['bp']
             lines.append(f"{i}. {move['name']}  {move['type']}  {bp}  {move['pp']}/{move['max_pp']} PP")
         
-        embed = discord.Embed(title="Battle!", description="\n".join(lines), color=0x50C878)
+        embed = discord.Embed(title="⚔️ Battle!", description="\n".join(lines), color=0x50C878)
         return embed
     
     def build_buttons(self):
         self.clear_items()
+        
+        # Move buttons
         for i, move in enumerate(self.active["moves"], 1):
             disabled = move["pp"] <= 0
             btn = Button(label=f"{i}. {move['name']}", row=0, disabled=disabled)
-            btn.callback = self.make_callback(i)
+            btn.callback = self.make_move_callback(i)
             self.add_item(btn)
         
-        bag_btn = Button(label="Bag", row=1, style=discord.ButtonStyle.secondary)
-        bag_btn.callback = self.bag_callback
-        self.add_item(bag_btn)
+        # Catch button
+        catch_btn = Button(label="Catch", row=1, style=discord.ButtonStyle.success)
+        catch_btn.callback = self.catch_callback
+        self.add_item(catch_btn)
         
+        # Run button
         run_btn = Button(label="Run", row=1, style=discord.ButtonStyle.danger)
         run_btn.callback = self.run_callback
         self.add_item(run_btn)
     
-    def make_callback(self, move_idx):
+    def make_move_callback(self, move_idx):
         async def callback(interaction: discord.Interaction):
             await self.do_turn(interaction, move_idx - 1)
         return callback
     
-    async def bag_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Bag coming soon!", ephemeral=True)
+    async def catch_callback(self, interaction: discord.Interaction):
+        inv = save["inventory"]
+        if inv["poke_balls"] <= 0:
+            await interaction.response.send_message("No Poké Balls left!", ephemeral=True)
+            return
+        
+        inv["poke_balls"] -= 1
+        rate = catch_rate(self.wild)
+        shakes = 0
+        
+        for i in range(3):
+            if random.randint(0, 255) < rate:
+                shakes += 1
+            else:
+                break
+        
+        msg = f"You threw a Poké Ball!\n"
+        shake_symbols = ["...", "......", "........."]
+        
+        if shakes == 3:
+            # Caught!
+            msg += f"{shake_symbols[0]}\n{shake_symbols[1]}\n{shake_symbols[2]}\n**Gotcha!** {self.wild['name']} was caught!"
+            
+            new_mon = {
+                "name": self.wild["name"],
+                "level": self.wild["level"],
+                "hp": self.wild["max_hp"],
+                "max_hp": self.wild["max_hp"],
+                "nature": random.choice(["Adamant", "Jolly", "Modest", "Timid", "Naughty", "Hasty", "Calm", "Bold"]),
+                "types": self.wild["types"],
+                "shiny": self.wild.get("shiny", False),
+                "ability": "Standard",
+                "held": None,
+                "moves": [
+                    {"name": "Tackle", "type": "Normal", "bp": 40, "pp": 35, "max_pp": 35}
+                ]
+            }
+            
+            if len(save["party"]) < 6:
+                save["party"].append(new_mon)
+                msg += f"\n{self.wild['name']} was added to your party!"
+            else:
+                save["box"].append(new_mon)
+                msg += f"\n{self.wild['name']} was sent to the PC box!"
+            
+            del active_battles[self.user_id]
+            save_game(save)
+            await interaction.response.edit_message(content=msg, embed=None, view=None)
+        else:
+            msg += f"{shake_symbols[:shakes]}\nOh no! It broke free!"
+            await interaction.response.edit_message(content=msg, embed=self.build_embed(), view=self)
+            self.build_buttons()
     
     async def run_callback(self, interaction: discord.Interaction):
         del active_battles[self.user_id]
@@ -214,31 +290,26 @@ class BattleView(View):
             await interaction.response.send_message("No PP left!", ephemeral=True)
             return
         
-        # Player attacks
         move["pp"] -= 1
         bp = move["bp"] if isinstance(move["bp"], int) else 40
         damage = max(1, int((active["level"] * bp / 30) * random.uniform(0.85, 1.0)))
-        wild["hp"] -= damage
+        wild["hp"] = max(0, wild["hp"] - damage)
         
         lines = [f"**{active['name']}** used **{move['name']}**!"]
+        
         if wild["hp"] <= 0:
-            wild["hp"] = 0
             lines.append(f"Wild {wild['name']} fainted!")
-            lines.append(f"**{active['name']}** gained some experience!")
             del active_battles[self.user_id]
             save_game(save)
             await interaction.response.edit_message(content="\n".join(lines), embed=None, view=None)
             return
         
-        lines.append(f"Wild {wild['name']} took damage!")
-        
-        # Wild attacks (simple)
+        # Wild attacks
         w_damage = max(1, int((wild["level"] * 20 / 30) * random.uniform(0.85, 1.0)))
-        active["hp"] -= w_damage
+        active["hp"] = max(0, active["hp"] - w_damage)
         lines.append(f"Wild **{wild['name']}** attacked!")
         
         if active["hp"] <= 0:
-            active["hp"] = 0
             lines.append(f"**{active['name']}** fainted!")
             del active_battles[self.user_id]
             save_game(save)
@@ -260,7 +331,7 @@ async def on_ready():
 async def party(interaction: discord.Interaction):
     await interaction.response.send_message(party_display())
 
-@bot.tree.command(name="inventory", description="Check your bag and money")
+@bot.tree.command(name="inventory", description="Check your bag")
 async def inventory(interaction: discord.Interaction):
     inv = save["inventory"]
     lines = [
@@ -282,13 +353,13 @@ async def heal(interaction: discord.Interaction):
     save_game(save)
     await interaction.response.send_message("✅ Your team has been fully healed.")
 
-@bot.tree.command(name="explore", description="Look for wild Pokémon in the current area")
+@bot.tree.command(name="explore", description="Look for wild Pokémon")
 async def explore(interaction: discord.Interaction):
     loc = save["location"]
     table = ENCOUNTERS.get(loc, [])
     
     if not table:
-        await interaction.response.send_message(f"No wild Pokémon here. Try a route or forest.")
+        await interaction.response.send_message("No wild Pokémon here.")
         return
     
     user_id = interaction.user.id
@@ -296,10 +367,8 @@ async def explore(interaction: discord.Interaction):
         await interaction.response.send_message("You're already in a battle!", ephemeral=True)
         return
     
-    # Pick random encounter
     encounter = random.choice(table)
     level = random.randint(*encounter["level"])
-    # Shiny check
     shiny = random.randint(1, 4096) == 1
     max_hp = 15 + level * 3
     
@@ -312,13 +381,12 @@ async def explore(interaction: discord.Interaction):
         "shiny": shiny
     }
     
-    shiny_text = "✨ " if shiny else ""
-    
     view = BattleView(user_id, wild_mon)
     active_battles[user_id] = view
     view.build_buttons()
     embed = view.build_embed()
     
+    shiny_text = "✨ " if shiny else ""
     await interaction.response.send_message(
         f"{shiny_text}Wild **{encounter['name']}** appeared! Lv.{level}",
         embed=embed,
@@ -337,7 +405,7 @@ async def move(interaction: discord.Interaction, direction: str):
         await interaction.response.send_message(f"You traveled {direction} to **{save['location']}**.")
     else:
         dirs = ", ".join(connections.keys())
-        await interaction.response.send_message(f"Can't go {direction} from here. Options: {dirs}")
+        await interaction.response.send_message(f"Can't go {direction}. Options: {dirs}")
 
 @move.autocomplete("direction")
 async def move_autocomplete(interaction: discord.Interaction, current: str):
@@ -353,8 +421,20 @@ async def map_cmd(interaction: discord.Interaction):
     for d, dest in connections.items():
         lines.append(f"{d} → {dest}")
     if not connections:
-        lines.append("Nowhere from here.")
+        lines.append("Nowhere.")
     await interaction.response.send_message("\n".join(lines))
 
-# ========== RUN BOT ==========
+@bot.tree.command(name="box", description="View your PC box")
+async def box_cmd(interaction: discord.Interaction):
+    box = save.get("box", [])
+    if not box:
+        await interaction.response.send_message("Your PC box is empty.")
+        return
+    lines = [f"**PC Box ({len(box)} Pokémon)**\n"]
+    for i, mon in enumerate(box, 1):
+        shiny = "✨ " if mon.get("shiny") else ""
+        lines.append(f"{i}. {shiny}{mon['name']} Lv.{mon['level']} {mon['types']}")
+    await interaction.response.send_message("\n".join(lines))
+
+# ========== RUN ==========
 bot.run(os.environ["DISCORD_TOKEN"])

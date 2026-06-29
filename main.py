@@ -345,7 +345,135 @@ class BattleView(View):
 @bot.event
 async def on_ready():
     await bot.tree.sync(); print(f"Online as {bot.user}")
+# ========== TITLE SCREEN ==========
+@bot.tree.command(name="start", description="Open the title screen")
+async def start(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="⚡ POKÉMON: RIFT ⚡",
+        description=(
+            "*A darker journey awaits.*\n\n"
+            "**Your childhood friend is missing.**\n"
+            "**An impossible Pokémon hatched from her final egg.**\n"
+            "**The League won't help. The wilderness is lethal.**\n"
+            "**And the clues point toward something ancient — something sealed.**\n\n"
+            "*The Rift is opening. Are you ready?*"
+        ),
+        color=0x4B0082
+    )
+    class TitleView(View):
+        def __init__(self):
+            super().__init__(timeout=600)
+        @discord.ui.button(label="🆕 New Game", style=discord.ButtonStyle.success, row=0)
+        async def new_game(self, btn_i, btn):
+            if os.path.exists(SAVE_FILE):
+                class ConfirmView(View):
+                    def __init__(self): super().__init__(timeout=60)
+                    @discord.ui.button(label="Yes, start fresh", style=discord.ButtonStyle.danger)
+                    async def confirm(self, ci, cb):
+                        os.remove(SAVE_FILE)
+                        global save; save = DEFAULT_SAVE.copy(); save_game(save)
+                        await start_game_intro(ci)
+                    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+                    async def cancel(self, ci, cb): await ci.response.edit_message(embed=embed, view=TitleView())
+                await btn_i.response.edit_message(content="⚠️ A save file exists. Overwrite?", embed=None, view=ConfirmView())
+            else:
+                global save; save = DEFAULT_SAVE.copy(); save_game(save)
+                await start_game_intro(btn_i)
+        @discord.ui.button(label="💾 Continue", style=discord.ButtonStyle.primary, row=0)
+        async def load_game(self, btn_i, btn):
+            if not os.path.exists(SAVE_FILE): await btn_i.response.send_message("No save file found.", ephemeral=True); return
+            global save; save = load_save()
+            embed2 = discord.Embed(title="Game Loaded", description=f"**Location:** {save['location']}\n**Money:** ₽{save['money']}\n**Badges:** {len(save['badges'])}\n**Party:** {len(save['party'])} Pokémon\n\nUse **/menu** to play or **/story** to continue.", color=0x4B0082)
+            await btn_i.response.edit_message(embed=embed2, view=None)
+    await interaction.response.send_message(embed=embed, view=TitleView())
 
+async def start_game_intro(interaction):
+    embed1 = discord.Embed(title="Pallet Town — Late Afternoon", description="*The sea glitters. Pidgey call from the rooftops. You've lived here your whole life.*\n\n*You are GR22N. Your friends became legends. You never became a trainer. But Leaf is missing — and you're going to find her.*\n\n*You're in Daisy Oak's bedroom. She's beside you, tracing the scar on your shoulder.*", color=0x4B0082)
+    class IntroView(View):
+        def __init__(self): super().__init__(timeout=300)
+        @discord.ui.button(label="Go to the window", style=discord.ButtonStyle.primary)
+        async def to_window(self, btn_i, btn):
+            self.clear_items()
+            btn1 = Button(label="Go downstairs", style=discord.ButtonStyle.primary)
+            btn1.callback = self.go_downstairs; self.add_item(btn1)
+            embed2 = discord.Embed(title="Daisy's Room", description="*An Aerodactyl stands in the ruined garden. Blood on its beak. The man dismounting is BLUE.*\n\n**DAISY:** \"Who is it?\"", color=0x4B0082)
+            await btn_i.response.edit_message(embed=embed2, view=self)
+        async def go_downstairs(self, btn_i):
+            embed3 = discord.Embed(title="Oak's Living Room", description="**BLUE:** \"Red's missing. Leaf's been off-grid for six months.\"\n\n*He notices you.*\n\n**BLUE:** \"You've never thrown a Poké Ball. Stay here. Let the real trainers handle this.\"\n\n*He leaves. Oak says nothing.*", color=0x4B0082)
+            await btn_i.response.edit_message(embed=embed3, view=DaisyCharmView())
+    await interaction.response.edit_message(embed=embed1, view=IntroView())
+
+class DaisyCharmView(View):
+    def __init__(self): super().__init__(timeout=300)
+    @discord.ui.button(label="Return to Daisy", style=discord.ButtonStyle.primary)
+    async def back_to_daisy(self, btn_i, btn):
+        embed = discord.Embed(title="Daisy's Gift", description="**DAISY:** \"You're going after her.\"\n\n*She presses a warm, iridescent charm into your palm.*\n\n**DAISY:** \"It was my mother's. It brought luck. Just... don't die.\"\n\n✅ **Shiny Charm** obtained!", color=0x4B0082)
+        save["story_flags"]["daisy_oak_gave_shiny_charm"] = True; save_game(save)
+        await btn_i.response.edit_message(embed=embed, view=LeafsHouseIntroView())
+
+class LeafsHouseIntroView(View):
+    def __init__(self): super().__init__(timeout=300)
+    @discord.ui.button(label="Go to Leaf's house", style=discord.ButtonStyle.primary)
+    async def to_leafs(self, btn_i, btn):
+        embed = discord.Embed(title="Leaf's House — Evening", description="*The study is chaos — maps, notes, a corkboard with fifteen missing persons connected to Mt. Coronet. Words repeat: RIFT. HISUI. VANE.*\n\n*In the corner, an incubator hums.*\n\n*You reach out.*", color=0x4B0082)
+        await btn_i.response.edit_message(embed=embed, view=EggHatchIntroView())
+
+class EggHatchIntroView(View):
+    def __init__(self): super().__init__(timeout=300)
+    @discord.ui.button(label="🥚 Touch the egg", style=discord.ButtonStyle.success)
+    async def hatch(self, btn_i, btn):
+        save["story_flags"]["leaf_egg_hatched"] = True; save["story_flags"]["knows_dr_vane_name"] = True
+        save["story_flags"]["blue_mocked_and_left"] = True; save_game(save)
+        embed = discord.Embed(title="The Egg Hatches", description="*The shell splits. A fox — white fur, blue spectral wisps, ancient yellow eyes — tumbles into your hands.*\n\n**Shiny Hisuian Zorua.** A Pokémon that doesn't exist in any Pokédex.\n\n*Leaf's last note:*\n\"Don't trust the League. Hisui is real. The Rift is opening. Find me if you can. —L\"\n\n✅ **Shiny Hisuian Zorua** joined!\n✅ **Objective: Find Leaf**\n\nUse **/menu** to play. Use **/story** to continue.", color=0x4B0082)
+        await btn_i.response.edit_message(embed=embed, view=None)
+
+# ========== STORY COMMANDS ==========
+@bot.tree.command(name="story", description="Continue the main story")
+async def story(interaction: discord.Interaction):
+    flags = save["story_flags"]; loc = save["location"]
+    if loc == "Viridian Forest" and not flags.get("met_aurora"):
+        await aurora_scene(interaction)
+    elif loc == "Pewter City" and not flags.get("brock_defeated"):
+        await brock_gym_challenge(interaction)
+    elif not flags.get("brock_defeated"):
+        await interaction.response.send_message("Head to Pewter City. The Gym awaits.", ephemeral=True)
+    else:
+        await interaction.response.send_message("All current story content complete. More coming soon!", ephemeral=True)
+
+async def aurora_scene(interaction):
+    embed = discord.Embed(title="Viridian Forest — Night", description="*A light flickers. A woman crouches by a fallen tree — silver-blue hair, sharp green eyes. A Pelipper mists the air with rain. Her white shirt is soaked.*\n\n**???:** \"You're either very brave or very stupid. Which is it?\"\n\n**???:** \"I'm Aurora. Investigative journalist.\"", color=0x2E8B57)
+    class AV(View):
+        def __init__(self): super().__init__(timeout=300)
+        @discord.ui.button(label="...", style=discord.ButtonStyle.primary)
+        async def talk(self, btn_i, btn):
+            save["story_flags"]["met_aurora"] = True; save["inventory"]["key_items"] = save["inventory"].get("key_items", []) + ["Aurora's Radio Frequency"]; save_game(save)
+            embed2 = discord.Embed(title="Aurora Voss — Journalist", description="**AURORA:** \"That's a Hisuian Zorua. Those don't exist anymore.\"\n\n*You tell her about Leaf.*\n\n**AURORA:** \"Leaf was my source. For five years.\"\n\n*She presses a radio into your hand.*\n\n**AURORA:** \"If you find anything, call me. Try not to die.\"\n\n✅ **Aurora's Radio Frequency** obtained!", color=0x2E8B57)
+            await btn_i.response.edit_message(embed=embed2, view=None)
+    await interaction.response.send_message(embed=embed, view=AV())
+
+async def brock_gym_challenge(interaction):
+    first = save["story_flags"].get("brock_first_attempt", True)
+    if first:
+        embed = discord.Embed(title="Pewter Gym — Forrest", description="**FORREST:** \"GR22N, right? My brother told me about you. Doubles. Six-on-six. No items. Let's rock.\"", color=0xB8860B)
+    else:
+        embed = discord.Embed(title="Pewter Gym — Forrest", description="**FORREST:** \"Back for more? Let's go.\"", color=0xB8860B)
+    class GV(View):
+        def __init__(self): super().__init__(timeout=300)
+        @discord.ui.button(label="⚔️ Challenge Forrest", style=discord.ButtonStyle.danger)
+        async def fight(self, btn_i, btn):
+            save["story_flags"]["brock_first_attempt"] = False; save_game(save)
+            mons = [
+                {"name": "Geodude", "level": 12, "types": "Rock/Ground", "hp": 40, "max_hp": 40, "moves": [{"name": "Rock Throw", "type": "Rock", "bp": 50}]},
+                {"name": "Onix", "level": 14, "types": "Rock/Ground", "hp": 50, "max_hp": 50, "moves": [{"name": "Rock Slide", "type": "Rock", "bp": 75}]},
+                {"name": "Geodude", "level": 12, "types": "Rock/Ground", "hp": 40, "max_hp": 40, "moves": [{"name": "Tackle", "type": "Normal", "bp": 40}]},
+                {"name": "Kabuto", "level": 13, "types": "Rock/Water", "hp": 42, "max_hp": 42, "moves": [{"name": "Aqua Jet", "type": "Water", "bp": 40}]},
+                {"name": "Cranidos", "level": 14, "types": "Rock", "hp": 48, "max_hp": 48, "moves": [{"name": "Headbutt", "type": "Normal", "bp": 70}]},
+                {"name": "Onix", "level": 15, "types": "Rock/Ground", "hp": 55, "max_hp": 55, "moves": [{"name": "Rock Slide", "type": "Rock", "bp": 75}]}
+            ]
+            view = BattleView(btn_i.user.id, mons, is_trainer=True, trainer_name="Forrest")
+            active_battles[btn_i.user.id] = view; view.build_buttons()
+            await btn_i.response.edit_message(content="⚔️ **Gym Leader Forrest** challenges you!", embed=view.build_embed(), view=view)
+    await interaction.response.send_message(embed=embed, view=GV())
 # ========== MAIN MENU ==========
 @bot.tree.command(name="menu", description="Open the main game menu")
 async def menu(interaction: discord.Interaction):

@@ -692,6 +692,8 @@ async def brock_gym_challenge(interaction):
             active_battles[btn_i.user.id] = view; view.build_buttons()
             await btn_i.response.edit_message(content="⚔️ **Gym Leader Forrest** challenges you!", embed=view.build_embed(), view=view)
     await interaction.response.send_message(embed=embed, view=GV())
-
+@bot.tree.command(name="reset_commands", description="Force sync all commands")
+async def reset_commands(interaction: discord.Interaction):
+    await interaction.response.send_message("Resetting...", ephemeral=True)
 # ========== RUN ==========
 bot.run(os.environ["DISCORD_TOKEN"])

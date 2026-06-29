@@ -409,14 +409,22 @@ async def menu(interaction):
             lines = [f"**📍 {loc}**\n"]
             for d, dest in conn.items(): lines.append(f"**{d}** → {dest}")
             if not conn: lines.append("Nowhere to go.")
-            class MV(View):
-                def __init__(self):
-                    super().__init__(timeout=60)
-                    for d, dest in conn.items():
-                        btn = Button(label=f"{d} → {dest}", style=discord.ButtonStyle.secondary)
-                        btn.callback = (lambda d2=d, d3=dest: (lambda mi: (setattr(save, "location", d3), save_game(save), mi.response.send_message(f"Traveled {d2} to **{d3}**."))[2])())()
-                        self.add_item(btn)
-            await s.response.send_message("\n".join(lines), view=MV() if conn else None, ephemeral=True)
+            if conn:
+                class MV(View):
+                    def __init__(self):
+                        super().__init__(timeout=60)
+                        for d, dest in conn.items():
+                            btn = Button(label=f"{d} → {dest}", style=discord.ButtonStyle.secondary)
+                            btn.callback = self.make_cb(d, dest)
+                            self.add_item(btn)
+                    def make_cb(self2, d, dest):
+                        async def cb(mi):
+                            save["location"] = dest; save_game(save)
+                            await mi.response.send_message(f"Traveled {d} to **{dest}**.")
+                        return cb
+                await s.response.send_message("\n".join(lines), view=MV(), ephemeral=True)
+            else:
+                await s.response.send_message("\n".join(lines), ephemeral=True)
         @discord.ui.button(label="🏥 Heal", style=discord.ButtonStyle.danger, row=2)
         async def hl(self2, s, b):
             if save["location"] not in ["Pallet Town","Viridian City","Pewter City"]: await s.response.send_message("Need a city!", ephemeral=True); return
